@@ -1,0 +1,148 @@
+az login --use-device-code
+
+UNIQUEID=$(openssl rand -hex 3)
+APPNAME=petclinic
+RESOURCE_GROUP=rg-$APPNAME-$UNIQUEID
+LOCATION=westeurope
+az group create -g $RESOURCE_GROUP -l $LOCATION
+
+MYACR=acr$APPNAME$UNIQUEID
+az acr create \
+    -n $MYACR \
+    -g $RESOURCE_GROUP \
+    --sku Basic
+
+VIRTUAL_NETWORK_NAME=vnet-$APPNAME-$UNIQUEID
+az network vnet create \
+    --resource-group $RESOURCE_GROUP \
+    --name $VIRTUAL_NETWORK_NAME \
+    --location $LOCATION \
+    --address-prefix 10.1.0.0/16
+   
+AKS_SUBNET_CIDR=10.1.0.0/24
+az network vnet subnet create \
+    --resource-group $RESOURCE_GROUP \
+    --vnet-name $VIRTUAL_NETWORK_NAME \
+    --address-prefixes $AKS_SUBNET_CIDR \
+    --name aks-subnet 
+
+SUBNET_ID=$(az network vnet subnet show --resource-group $RESOURCE_GROUP --vnet-name $VIRTUAL_NETWORK_NAME --name aks-subnet --query id -o tsv)
+
+AKSCLUSTER=aks-$APPNAME-$UNIQUEID
+az aks create \
+    -n $AKSCLUSTER \
+    -g $RESOURCE_GROUP \
+    --generate-ssh-keys \
+    --attach-acr $MYACR \
+    --vnet-subnet-id $SUBNET_ID
+
+
+MYSQL_SERVER_NAME=mysql-$APPNAME-$UNIQUEID
+MYSQL_ADMIN_USERNAME=myadmin
+MYSQL_ADMIN_PASSWORD=<myadmin-password>
+DATABASE_NAME=petclinic
+      
+az mysql flexible-server create \
+    --admin-user myadmin \
+    --admin-password ${MYSQL_ADMIN_PASSWORD} \
+    --name ${MYSQL_SERVER_NAME} \
+    --resource-group ${RESOURCE_GROUP} 
+
+ az mysql flexible-server db create \
+     --server-name $MYSQL_SERVER_NAME \
+     --resource-group $RESOURCE_GROUP \
+     -d $DATABASE_NAME
+
+ az mysql flexible-server firewall-rule create \
+     --rule-name allAzureIPs \
+     --name ${MYSQL_SERVER_NAME} \
+     --resource-group ${RESOURCE_GROUP} \
+     --start-ip-address 0.0.0.0 --end-ip-address 0.0.0.0
+
+VERSION=2.7.6
+
+
+mvn clean package -DskipTests
+
+az acr login --name $MYACR
+
+mkdir -p staging-acr
+cd staging-acr
+
+cp ../spring-petclinic-api-gateway/target/spring-petclinic-api-gateway-$VERSION.jar spring-petclinic-api-gateway-$VERSION.jar
+cp ../spring-petclinic-admin-server/target/spring-petclinic-admin-server-$VERSION.jar spring-petclinic-admin-server-$VERSION.jar
+cp ../spring-petclinic-customers-service/target/spring-petclinic-customers-service-$VERSION.jar spring-petclinic-customers-service-$VERSION.jar
+cp ../spring-petclinic-visits-service/target/spring-petclinic-visits-service-$VERSION.jar spring-petclinic-visits-service-$VERSION.jar
+cp ../spring-petclinic-vets-service/target/spring-petclinic-vets-service-$VERSION.jar spring-petclinic-vets-service-$VERSION.jar
+cp ../spring-petclinic-config-server/target/spring-petclinic-config-server-$VERSION.jar spring-petclinic-config-server-$VERSION.jar
+cp ../spring-petclinic-discovery-server/target/spring-petclinic-discovery-server-$VERSION.jar spring-petclinic-discovery-server-$VERSION.jar
+
+az acr build \
+    --resource-group $RESOURCE_GROUP \
+    --registry $MYACR \
+    --image spring-petclinic-api-gateway:$VERSION \
+    --build-arg ARTIFACT_NAME=spring-petclinic-api-gateway-$VERSION.jar \
+    --build-arg APP_PORT=8080 \
+    .
+
+az acr repository list \
+   -n $MYACR
+
+az acr build \
+    --resource-group $RESOURCE_GROUP \
+    --registry $MYACR \
+    --image spring-petclinic-admin-server:$VERSION \
+    --build-arg ARTIFACT_NAME=spring-petclinic-admin-server-$VERSION.jar \
+    --build-arg APP_PORT=8080 \
+    .
+   
+az acr build \
+    --resource-group $RESOURCE_GROUP \
+    --registry $MYACR \
+    --image spring-petclinic-customers-service:$VERSION \
+    --build-arg ARTIFACT_NAME=spring-petclinic-customers-service-$VERSION.jar \
+    --build-arg APP_PORT=8080 \
+    .
+   
+az acr build \
+    --resource-group $RESOURCE_GROUP \
+    --registry $MYACR \
+    --image spring-petclinic-visits-service:$VERSION \
+    --build-arg ARTIFACT_NAME=spring-petclinic-visits-service-$VERSION.jar \
+    --build-arg APP_PORT=8080 \
+    .
+   
+az acr build \
+    --resource-group $RESOURCE_GROUP \
+    --registry $MYACR \
+    --image spring-petclinic-vets-service:$VERSION \
+    --build-arg ARTIFACT_NAME=spring-petclinic-vets-service-$VERSION.jar \
+    --build-arg APP_PORT=8080 \
+    .
+
+az acr build \
+    --resource-group $RESOURCE_GROUP \
+    --registry $MYACR \
+    --image spring-petclinic-config-server:$VERSION \
+    --build-arg ARTIFACT_NAME=spring-petclinic-config-server-$VERSION.jar \
+    --build-arg APP_PORT=8888 \
+    .
+
+az acr build \
+    --resource-group $RESOURCE_GROUP \
+    --registry $MYACR \
+    --image spring-petclinic-discovery-server:$VERSION \
+    --build-arg ARTIFACT_NAME=spring-petclinic-discovery-server-$VERSION.jar \
+    --build-arg APP_PORT=8761 \
+    .
+
+az acr repository list \
+   -n $MYACR
+
+az acr repository show-tags \
+    -n $MYACR \
+    --repository spring-petclinic-customers-service
+
+
+
+

@@ -1,0 +1,133 @@
+EVENTHUBS_NAMESPACE=evhns-$APPNAME-$UNIQUEID
+
+az eventhubs namespace create \
+  --resource-group $RESOURCE_GROUP \
+  --name $EVENTHUBS_NAMESPACE \
+  --location $LOCATION
+
+EVENTHUB_NAME=telemetry
+
+az eventhubs eventhub create \
+  --name $EVENTHUB_NAME \
+  --resource-group $RESOURCE_GROUP \
+  --namespace-name $EVENTHUBS_NAMESPACE
+
+RULE_NAME=listensendrule
+
+az eventhubs eventhub authorization-rule create \
+  --resource-group $RESOURCE_GROUP \
+  --namespace-name $EVENTHUBS_NAMESPACE \
+  --eventhub-name $EVENTHUB_NAME \
+  --name $RULE_NAME \
+  --rights Listen Send
+
+EVENTHUB_CONNECTIONSTRING=$(az eventhubs eventhub authorization-rule keys list \
+    --resource-group $RESOURCE_GROUP \
+    --namespace-name $EVENTHUBS_NAMESPACE \
+    --eventhub-name $EVENTHUB_NAME \
+    --name $RULE_NAME \
+    --query primaryConnectionString \
+    --output tsv)
+
+echo $EVENTHUB_CONNECTIONSTRING
+
+az keyvault secret set \
+    --name SPRING-KAFKA-PROPERTIES-SASL-JAAS-CONFIG \
+    --file secretfile.txt \
+    --vault-name $KEYVAULT_NAME
+
+mvn clean package -DskipTests -rf :spring-petclinic-customers-service
+
+cd staging-acr
+rm spring-petclinic-customers-service-$VERSION.jar
+   
+cp ../spring-petclinic-customers-service/target/spring-petclinic-customers-service-$VERSION.jar spring-petclinic-customers-service-$VERSION.jar
+az acr build \
+    --resource-group $RESOURCE_GROUP \
+    --registry $MYACR \
+    --image spring-petclinic-customers-service:$VERSION \
+    --build-arg ARTIFACT_NAME=spring-petclinic-customers-service-$VERSION.jar \
+    --build-arg APP_PORT=8080 \
+    --build-arg AI_JAR=ai.jar \
+    .
+
+cat <<EOF | kubectl apply -n spring-petclinic -f -
+apiVersion: secrets-store.csi.x-k8s.io/v1
+kind: SecretProviderClass
+metadata:
+  name: azure-kvname-user-msi
+spec:
+  provider: azure
+  secretObjects:
+  - secretName: pwsecret
+    type: Opaque
+    data: 
+    - objectName: password
+      key: password
+  - secretName: unsecret
+    type: Opaque
+    data: 
+    - objectName: username
+      key: username
+  - secretName: gitpatsecret
+    type: Opaque
+    data: 
+    - objectName: gitpat
+      key: gitpat
+  - secretName: sbsecret
+    type: Opaque
+    data: 
+    - objectName: sbconn
+      key: sbconn
+  - secretName: kafkasecret
+    type: Opaque
+    data: 
+    - objectName: kafka
+      key: kafka
+  parameters:
+    usePodIdentity: "false"
+    useVMManagedIdentity: "true" 
+    userAssignedIdentityID: $CLIENT_ID 
+    keyvaultName: $KEYVAULT_NAME
+    cloudName: "" 
+    objects: |
+      array:
+        - |
+          objectName: SPRING-DATASOURCE-USERNAME
+          objectType: secret  
+          objectAlias: username   
+          objectVersion: ""               
+        - |
+          objectName: SPRING-DATASOURCE-PASSWORD
+          objectType: secret   
+          objectAlias: password          
+          objectVersion: ""  
+        - |
+          objectName: GIT-PAT
+          objectType: secret   
+          objectAlias: gitpat          
+          objectVersion: ""  
+        - |
+          objectName: SPRING-JMS-SERVICEBUS-CONNECTIONSTRING
+          objectType: secret   
+          objectAlias: sbconn       
+          objectVersion: ""  
+        - |
+          objectName: SPRING-KAFKA-PROPERTIES-SASL-JAAS-CONFIG
+          objectType: secret   
+          objectAlias: kafka       
+          objectVersion: ""  
+    tenantId: $ADTENANT
+EOF
+
+cd ../kubernetes
+kubectl apply -f spring-petclinic-customers-service.yml
+
+kubectl get pods
+
+kubectl logs customers-service-b654d848c-m9v56
+
+
+kubectl get pods
+kubectl logs customers-service-b654d848c-7cdxb 
+kubectl delete pod customers-service-b654d848c-m9v56

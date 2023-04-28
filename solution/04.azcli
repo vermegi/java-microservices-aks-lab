@@ -1,0 +1,128 @@
+KEYVAULT_NAME=kv-$APPNAME-$UNIQUEID
+az keyvault create \
+    --name $KEYVAULT_NAME \
+    --resource-group $RESOURCE_GROUP \
+    --location $LOCATION \
+    --sku standard
+
+#coach guide: executing some az cli statements from a GH codespace to the Azure environment, might be blocked by the Microsoft tenant. To bypass this restriction, guide the learners to use the Cloud Shell for these specific statements. 
+
+az keyvault secret set \
+    --name SPRING-DATASOURCE-USERNAME \
+    --value myadmin \
+    --vault-name $KEYVAULT_NAME
+   
+az keyvault secret set \
+    --name SPRING-DATASOURCE-PASSWORD \
+    --value $MYSQL_ADMIN_PASSWORD \
+    --vault-name $KEYVAULT_NAME
+
+GIT_PAT=<your PAT>
+az keyvault secret set \
+    --name GIT-PAT \
+    --value $GIT_PAT \
+    --vault-name $KEYVAULT_NAME
+
+az aks enable-addons --addons azure-keyvault-secrets-provider --name $AKSCLUSTER --resource-group $RESOURCE_GROUP
+
+kubectl get pods -n kube-system
+
+MANAGED_RESOURCE_GROUP=$(az aks show -g $RESOURCE_GROUP -n $AKSCLUSTER --query nodeResourceGroup --output tsv)
+NODE_POOL_NAME=$(az vmss list -g $MANAGED_RESOURCE_GROUP --query [].name --output tsv)
+CLIENT_ID=$(az vmss identity show -g $MANAGED_RESOURCE_GROUP  -n $NODE_POOL_NAME --query "userAssignedIdentities.*.clientId | [1]" -o tsv)
+
+az keyvault set-policy -g $RESOURCE_GROUP -n $KEYVAULT_NAME --key-permissions get --spn $CLIENT_ID
+az keyvault set-policy -g $RESOURCE_GROUP -n $KEYVAULT_NAME --secret-permissions get --spn $CLIENT_ID
+az keyvault set-policy -g $RESOURCE_GROUP -n $KEYVAULT_NAME --certificate-permissions get --spn $CLIENT_ID
+
+ADTENANT=$(az account show --query tenantId --output tsv)
+   
+cat <<EOF | kubectl apply -n spring-petclinic -f -
+apiVersion: secrets-store.csi.x-k8s.io/v1
+kind: SecretProviderClass
+metadata:
+  name: azure-kvname-user-msi
+spec:
+  provider: azure
+  secretObjects:
+  - secretName: pwsecret
+    type: Opaque
+    data: 
+    - objectName: password
+      key: password
+  - secretName: unsecret
+    type: Opaque
+    data: 
+    - objectName: username
+      key: username
+  - secretName: gitpatsecret
+    type: Opaque
+    data: 
+    - objectName: gitpat
+      key: gitpat
+  parameters:
+    usePodIdentity: "false"
+    useVMManagedIdentity: "true" 
+    userAssignedIdentityID: $CLIENT_ID 
+    keyvaultName: $KEYVAULT_NAME
+    cloudName: "" 
+    objects: |
+      array:
+        - |
+          objectName: SPRING-DATASOURCE-USERNAME
+          objectType: secret  
+          objectAlias: username   
+          objectVersion: ""               
+        - |
+          objectName: SPRING-DATASOURCE-PASSWORD
+          objectType: secret   
+          objectAlias: password          
+          objectVersion: ""   
+        - |
+          objectName: GIT-PAT
+          objectType: secret   
+          objectAlias: gitpat          
+          objectVersion: ""  
+    tenantId: $ADTENANT
+EOF
+
+cd src
+
+mvn clean package -DskipTests -rf :spring-petclinic-config-server
+
+cd staging-acr
+rm spring-petclinic-config-server-$VERSION.jar
+cp ../spring-petclinic-config-server/target/spring-petclinic-config-server-$VERSION.jar spring-petclinic-config-server-$VERSION.jar
+   
+az acr build \
+    --resource-group $RESOURCE_GROUP \
+    --registry $MYACR \
+    --image spring-petclinic-config-server:$VERSION \
+    --build-arg ARTIFACT_NAME=spring-petclinic-config-server-$VERSION.jar \
+    --build-arg APP_PORT=8888 \
+    --build-arg AI_JAR=ai.jar \
+    .
+
+kubectl apply -f spring-petclinic-config-server.yml 
+kubectl get pods -w
+
+kubectl apply -f spring-petclinic-customers-service.yml
+kubectl apply -f spring-petclinic-visits-service.yml
+kubectl apply -f spring-petclinic-vets-service.yml
+
+kubectl get secrets -n spring-petclinic
+
+kubectl describe pod customers-service-647d869ff8-7fjz4 -n spring-petclinic
+
+kubectl logs <name-of-the-pod> -n spring-petclinic -f
+
+kubectl exec -it <name-of-the-pod> -n spring-petclinic -- env 
+
+
+
+
+
+
+
+
+

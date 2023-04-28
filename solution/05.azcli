@@ -1,0 +1,135 @@
+SERVICEBUS_NAMESPACE=sb-$APPNAME-$UNIQUEID
+
+az servicebus namespace create \
+    --resource-group $RESOURCE_GROUP \
+    --name $SERVICEBUS_NAMESPACE \
+    --location $LOCATION \
+    --sku Premium
+
+# Issue on service bus creation with latest azure CLI version: https://github.com/Azure/azure-cli/issues/26272 should be fixed 'soon'?
+# Issue can be fixed by using cloud shell (for me this one was still on the previous azure CLI version)
+
+az servicebus queue create \
+    --resource-group $RESOURCE_GROUP \
+    --namespace-name $SERVICEBUS_NAMESPACE \
+    --name visits-requests
+
+SERVICEBUS_CONNECTIONSTRING=$(az servicebus namespace authorization-rule keys list \
+    --resource-group $RESOURCE_GROUP \
+    --namespace-name $SERVICEBUS_NAMESPACE \
+    --name RootManageSharedAccessKey \
+    --query primaryConnectionString \
+    --output tsv)
+
+az keyvault secret set \
+    --name SPRING-JMS-SERVICEBUS-CONNECTIONSTRING \
+    --value $SERVICEBUS_CONNECTIONSTRING \
+    --vault-name $KEYVAULT_NAME
+
+mvn clean package -DskipTests -rf :spring-petclinic-messaging-emulator
+
+cd staging-acr
+   
+cp ../spring-petclinic-messaging-emulator/target/spring-petclinic-messaging-emulator-$VERSION.jar spring-petclinic-messaging-emulator-$VERSION.jar
+az acr build \
+    --resource-group $RESOURCE_GROUP \
+    --registry $MYACR \
+    --image spring-petclinic-messaging-emulator:$VERSION \
+    --build-arg ARTIFACT_NAME=spring-petclinic-messaging-emulator-$VERSION.jar \
+    --build-arg APP_PORT=8080 \
+    --build-arg AI_JAR=ai.jar \
+    .
+
+cat <<EOF | kubectl apply -n spring-petclinic -f -
+apiVersion: secrets-store.csi.x-k8s.io/v1
+kind: SecretProviderClass
+metadata:
+  name: azure-kvname-user-msi
+spec:
+  provider: azure
+  secretObjects:
+  - secretName: pwsecret
+    type: Opaque
+    data: 
+    - objectName: password
+      key: password
+  - secretName: unsecret
+    type: Opaque
+    data: 
+    - objectName: username
+      key: username
+  - secretName: gitpatsecret
+    type: Opaque
+    data: 
+    - objectName: gitpat
+      key: gitpat
+  - secretName: sbsecret
+    type: Opaque
+    data: 
+    - objectName: sbconn
+      key: sbconn
+  parameters:
+    usePodIdentity: "false"
+    useVMManagedIdentity: "true" 
+    userAssignedIdentityID: $CLIENT_ID 
+    keyvaultName: $KEYVAULT_NAME
+    cloudName: "" 
+    objects: |
+      array:
+        - |
+          objectName: SPRING-DATASOURCE-USERNAME
+          objectType: secret  
+          objectAlias: username   
+          objectVersion: ""               
+        - |
+          objectName: SPRING-DATASOURCE-PASSWORD
+          objectType: secret   
+          objectAlias: password          
+          objectVersion: ""  
+        - |
+          objectName: SPRING-JMS-SERVICEBUS-CONNECTIONSTRING
+          objectType: secret   
+          objectAlias: sbconn       
+          objectVersion: ""  
+        - |
+          objectName: GIT-PAT
+          objectType: secret   
+          objectAlias: gitpat          
+          objectVersion: ""  
+    tenantId: $ADTENANT
+EOF
+
+cd ../kubernetes
+kubectl apply -f spring-petclinic-messaging-emulator.yml
+
+kubectl get secrets
+
+kubectl get services
+
+kubectl get pods -w
+
+kubectl logs messaging-emulator-6b65bdf7db-2dgcw
+
+kubectl describe pod messaging-emulator-6b65bdf7db-2dgcw -n spring-petclinic
+
+mvn clean package -DskipTests -rf :spring-petclinic-visits-service
+
+cd staging-acr
+rm spring-petclinic-visits-service-$VERSION.jar
+   
+cp ../spring-petclinic-visits-service/target/spring-petclinic-visits-service-$VERSION.jar spring-petclinic-visits-service-$VERSION.jar
+az acr build \
+    --resource-group $RESOURCE_GROUP \
+    --registry $MYACR \
+    --image spring-petclinic-visits-service:$VERSION \
+    --build-arg ARTIFACT_NAME=spring-petclinic-visits-service-$VERSION.jar \
+    --build-arg APP_PORT=8080 \
+    --build-arg AI_JAR=ai.jar \
+    .
+
+
+cd ../kubernetes
+kubectl apply -f spring-petclinic-visits-service.yml
+
+kubectl get pods -w
+

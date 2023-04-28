@@ -29,3 +29,8 @@ target/
 
 # Branch switching
 generated/
+
+ENVIRONMENT.azcli
+secretfile.txt
+
+*.jar
