@@ -13,7 +13,9 @@ spec:
     metadata:
       labels:
         app: config-server
+        azure.workload.identity/use: "true"
     spec:
+      serviceAccountName: workload-identity-sa
       volumes:
       - name: secrets-store01-inline
         csi: 
@@ -22,7 +24,7 @@ spec:
           volumeAttributes: 
             secretProviderClass: "azure-kvname-user-msi"
       containers:
-      - image: acrpetclinic40ef21.azurecr.io/spring-petclinic-config-server:2.7.6
+      - image: acrpetclinicbce419.azurecr.io/spring-petclinic-config-server:2.7.6
         name: config-server
         env:
         - name: "CONFIG_SERVER_URL"

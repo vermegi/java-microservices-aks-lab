@@ -1,0 +1,63 @@
+#https://learn.microsoft.com/en-us/azure/developer/java/ee/how-to-configure-passwordless-datasource?toc=%2Fazure%2Fdeveloper%2Fintro%2Ftoc.json&bc=%2Fazure%2Fdeveloper%2Fintro%2Fbreadcrumb%2Ftoc.json&tabs=mysql-flexible-server
+
+DB_ADMIN_USER_ASSIGNED_IDENTITY_NAME=uid-dbadmin-$APPNAME-$UNIQUEID
+
+az identity create --name "${DB_ADMIN_USER_ASSIGNED_IDENTITY_NAME}" --resource-group "${RESOURCE_GROUP}" --location "${LOCATION}"
+
+az mysql flexible-server identity assign \
+    --resource-group $RESOURCE_GROUP \
+    --server-name $MYSQL_SERVER_NAME \
+    --identity $DB_ADMIN_USER_ASSIGNED_IDENTITY_NAME
+
+CURRENT_USER=$(az account show --query user.name --output tsv)
+echo $CURRENT_USER
+CURRENT_USER_OBJECTID=$(az ad signed-in-user show --query id --output tsv)
+echo $CURRENT_USER_OBJECTID
+
+az mysql flexible-server ad-admin create \
+    --resource-group $RESOURCE_GROUP \
+    --server-name $MYSQL_SERVER_NAME \
+    --object-id $CURRENT_USER_OBJECTID \
+    --display-name $CURRENT_USER \
+    --identity $DB_ADMIN_USER_ASSIGNED_IDENTITY_NAME
+
+WI_CLIENT_ID=$(az identity show \
+    --resource-group ${RESOURCE_GROUP} \
+    --name $USER_ASSIGNED_IDENTITY_NAME \
+    --query clientId \
+    --output tsv)
+echo $WI_CLIENT_ID
+
+#MY_IP=$(curl http://whatismyip.akamai.com)
+
+# az mysql flexible-server firewall-rule create \
+#     --resource-group $RESOURCE_GROUP_NAME \
+#     --name $MYSQL_NAME \
+#     --rule-name AllowCurrentMachineToConnect \
+#     --start-ip-address ${MY_IP} \
+#     --end-ip-address ${MY_IP}
+
+IDENTITY_LOGIN_NAME="mysql_conn3"
+
+cat <<EOF >createuser.sql
+SET aad_auth_validate_oids_in_tenant = OFF;
+DROP USER IF EXISTS '${IDENTITY_LOGIN_NAME}'@'%';
+CREATE AADUSER '${IDENTITY_LOGIN_NAME}' IDENTIFIED BY '${WI_CLIENT_ID}';
+GRANT ALL PRIVILEGES ON ${DATABASE_NAME}.* TO '${IDENTITY_LOGIN_NAME}'@'%';
+FLUSH privileges;
+EOF
+
+RDBMS_ACCESS_TOKEN=$(az account get-access-token \
+    --resource-type oss-rdbms \
+    --query accessToken \
+    --output tsv) 
+echo $RDBMS_ACCESS_TOKEN
+
+az mysql flexible-server execute \
+    --name ${MYSQL_SERVER_NAME} \
+    --admin-user ${CURRENT_USER} \
+    --admin-password ${RDBMS_ACCESS_TOKEN} \
+    --file-path "createuser.sql"
+
+kubectl logs customers-service-5dd4dd77f9-9wdkg
+

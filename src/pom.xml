@@ -39,7 +39,7 @@
         <docker.image.dockerfile.dir>${basedir}</docker.image.dockerfile.dir>
         <docker.image.dockerize.version>v0.6.1</docker.image.dockerize.version>
         <docker.plugin.version>1.2.0</docker.plugin.version>
-        <version.spring.cloud.azure>4.4.1</version.spring.cloud.azure>
+        <version.spring.cloud.azure>4.8.0</version.spring.cloud.azure>
     </properties>
 
     <dependencyManagement>

@@ -91,6 +91,7 @@ az acr build \
     .
 
 AI_CONNECTIONSTRING=$(az monitor app-insights component show --app $AINAME -g $RESOURCE_GROUP --query connectionString)
+echo $AI_CONNECTIONSTRING
 
 cd ../kubernetes
 
@@ -99,7 +100,7 @@ kubectl replace -f config-map.yml --namespace spring-petclinic
 kubectl apply -f spring-petclinic-config-server.yml 
 kubectl get pods -w
 
-kubectl logs config-server-67975667dc-844kj
+kubectl logs customers-service-5dd4dd77f9-nh98q 
 
 kubectl apply -f spring-petclinic-discovery-server.yml
 kubectl get pods -w

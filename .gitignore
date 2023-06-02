@@ -34,3 +34,5 @@ ENVIRONMENT.azcli
 secretfile.txt
 
 *.jar
+src/create_ad_user.sql
+src/kubernetes/createuser.sql

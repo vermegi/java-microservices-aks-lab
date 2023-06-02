@@ -81,7 +81,7 @@ kubectl get pods
 
 kubectl describe pod config-server-67975667dc-844kj -n spring-petclinic
 
-kubectl logs config-server-67975667dc-844kj -n spring-petclinic
+kubectl logs customers-service-78c55fcf46-vtr5j -n spring-petclinic
 
 kubectl delete pod admin-server-7f466d568b-c2qk9
 
