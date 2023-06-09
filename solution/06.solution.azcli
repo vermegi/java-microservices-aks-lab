@@ -1,0 +1,134 @@
+EVENTHUBS_NAMESPACE=evhns-$APPNAME-$UNIQUEID
+echo $EVENTHUBS_NAMESPACE
+
+az eventhubs namespace create \
+  --resource-group $RESOURCE_GROUP \
+  --name $EVENTHUBS_NAMESPACE \
+  --location $LOCATION
+
+EVENTHUB_NAME=telemetry
+
+az eventhubs eventhub create \
+  --name $EVENTHUB_NAME \
+  --resource-group $RESOURCE_GROUP \
+  --namespace-name $EVENTHUBS_NAMESPACE
+
+az eventhubs namespace show --name $EVENTHUBS_NAMESPACE --resource-group $RESOURCE_GROUP --query id -o tsv
+
+EVENTHUB_ID=$(az eventhubs namespace show --name $EVENTHUBS_NAMESPACE --resource-group $RESOURCE_GROUP --query id -o tsv)
+echo $EVENTHUB_ID
+
+echo $USER_ASSIGNED_CLIENT_ID
+az role assignment create --assignee $USER_ASSIGNED_CLIENT_ID --role 'Azure Event Hubs Data Owner' --scope $EVENTHUB_ID
+
+# Using https://github.com/Azure-Samples/azure-spring-boot-samples/tree/main/eventhubs/spring-cloud-azure-stream-binder-eventhubs/eventhubs-binder 
+# Using https://learn.microsoft.com/en-us/azure/developer/java/spring-framework/configure-spring-cloud-stream-binder-java-app-azure-event-hub?toc=%2Fazure%2Fevent-hubs%2FTOC.json
+
+#Added to customers-service pom:
+#        <dependency>
+#           <groupId>com.azure.spring</groupId>
+#           <artifactId>spring-cloud-azure-starter</artifactId>
+#        </dependency>
+
+
+# SEE CONFIG REPO AND APPLICATION.YMLs FOR LATEST GOOD STATE OF THE CONFIG!
+# spring:
+#   application:
+#     name: customers-service
+#   config:
+#     import: optional:configserver:${CONFIG_SERVER_URL:http://localhost:8888/}
+#   cloud:
+#     stream:
+#       kafka:
+#         binder:
+#           brokers: evhns-petclinic-38cb12.servicebus.windows.net:9093
+#         bindings:
+#           consume-in-0.destination: telemetry
+#           consume-in-0.group: $Default
+#           supply-out-0:
+#             destination: telemetry
+#             producer:
+#               sync: true
+#       eventhubs:
+#         bindings:
+#           supply-out-0:
+#             producer:
+#               sync: true
+#     function:
+#       definition: supply
+
+# See ownerResource.java in customers-service
+cd ..
+mvn clean package -DskipTests -rf :spring-petclinic-customers-service
+
+cd staging-acr
+   
+cp ../spring-petclinic-customers-service/target/spring-petclinic-customers-service-$VERSION.jar spring-petclinic-customers-service-$VERSION.jar
+
+
+docker build -t $MYACR.azurecr.io/spring-petclinic-customers-service:$VERSION \
+    --build-arg ARTIFACT_NAME=spring-petclinic-customers-service-$VERSION.jar \
+    --build-arg APP_PORT=8080 \
+    --build-arg AI_JAR=ai.jar \
+    .
+
+#docker tag spring-petclinic-config-server:$VERSION $MYACR.azurecr.io/spring-petclinic-config-server:$VERSION
+
+docker image list
+
+docker push $MYACR.azurecr.io/spring-petclinic-customers-service:$VERSION
+
+kubectl get pods
+kubectl delete pod customers-service-7cbc4bbc4d-4854j
+
+kubectl get pods -w
+
+kubectl logs customers-service-7cbc4bbc4d-4854j -f
+
+# Consumer
+
+STORAGE_ACCOUNT_NAME=stg$APPNAME$UNIQUEID
+echo $STORAGE_ACCOUNT_NAME
+az storage account create --name $STORAGE_ACCOUNT_NAME --resource-group $RESOURCE_GROUP --location $LOCATION --sku "Standard_LRS" 
+az storage account show --name $STORAGE_ACCOUNT_NAME --resource-group $RESOURCE_GROUP --query id -o tsv
+STORAGE_ACCOUNT_ID=$(az storage account show --name $STORAGE_ACCOUNT_NAME --resource-group $RESOURCE_GROUP --query id -o tsv)
+echo $STORAGE_ACCOUNT_ID
+
+az storage container create --help
+
+az storage container create --name "eventhubs-binder3" --account-name $STORAGE_ACCOUNT_NAME --public-access container --auth-mode login
+az storage container show --name "eventhubs-binder" --account-name $STORAGE_ACCOUNT_NAME  --auth-mode login
+
+echo $USER_ASSIGNED_CLIENT_ID
+az role assignment create --assignee $USER_ASSIGNED_CLIENT_ID --role 'Storage Account Contributor' --scope $STORAGE_ACCOUNT_ID
+az role assignment create --assignee $USER_ASSIGNED_CLIENT_ID --role 'Storage Blob Data Contributor' --scope $STORAGE_ACCOUNT_ID
+az role assignment create --assignee $USER_ASSIGNED_CLIENT_ID --role 'Storage Blob Data Owner' --scope $STORAGE_ACCOUNT_ID/containers/eventhubs-binder2
+
+
+cd ..
+mvn clean package -DskipTests -rf :spring-petclinic-vets-service
+
+cd staging-acr
+   
+cp ../spring-petclinic-vets-service/target/spring-petclinic-vets-service-$VERSION.jar spring-petclinic-vets-service-$VERSION.jar
+
+
+docker build -t $MYACR.azurecr.io/spring-petclinic-vets-service:$VERSION \
+    --build-arg ARTIFACT_NAME=spring-petclinic-vets-service-$VERSION.jar \
+    --build-arg APP_PORT=8080 \
+    --build-arg AI_JAR=ai.jar \
+    .
+
+#docker tag spring-petclinic-config-server:$VERSION $MYACR.azurecr.io/spring-petclinic-config-server:$VERSION
+
+docker image list
+
+docker push $MYACR.azurecr.io/spring-petclinic-vets-service:$VERSION
+
+kubectl get pods
+kubectl delete pod vets-service-577b9b7b8d-mt4d2 
+kubectl get pods -w
+
+kubectl logs vets-service-577b9b7b8d-mt4d2 -f
+kubectl logs --help
+

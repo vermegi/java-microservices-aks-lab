@@ -1,0 +1,145 @@
+#https://learn.microsoft.com/en-us/azure/developer/java/ee/how-to-configure-passwordless-datasource?toc=%2Fazure%2Fdeveloper%2Fintro%2Ftoc.json&bc=%2Fazure%2Fdeveloper%2Fintro%2Fbreadcrumb%2Ftoc.json&tabs=mysql-flexible-server
+
+DB_ADMIN_USER_ASSIGNED_IDENTITY_NAME=uid-dbadmin-$APPNAME-$UNIQUEID
+
+az identity create --name "${DB_ADMIN_USER_ASSIGNED_IDENTITY_NAME}" --resource-group "${RESOURCE_GROUP}" --location "${LOCATION}"
+
+Before: 
+
+#See mysql before MI
+
+az mysql flexible-server identity assign \
+    --resource-group $RESOURCE_GROUP \
+    --server-name $MYSQL_SERVER_NAME \
+    --identity $DB_ADMIN_USER_ASSIGNED_IDENTITY_NAME
+
+CURRENT_USER=$(az account show --query user.name --output tsv)
+echo $CURRENT_USER
+CURRENT_USER_OBJECTID=$(az ad signed-in-user show --query id --output tsv)
+echo $CURRENT_USER_OBJECTID
+
+az mysql flexible-server ad-admin create \
+    --resource-group $RESOURCE_GROUP \
+    --server-name $MYSQL_SERVER_NAME \
+    --object-id $CURRENT_USER_OBJECTID \
+    --display-name $CURRENT_USER \
+    --identity $DB_ADMIN_USER_ASSIGNED_IDENTITY_NAME
+
+WI_CLIENT_ID=$(az identity show \
+    --resource-group ${RESOURCE_GROUP} \
+    --name $USER_ASSIGNED_IDENTITY_NAME \
+    --query clientId \
+    --output tsv)
+echo $WI_CLIENT_ID
+
+#MY_IP=$(curl http://whatismyip.akamai.com)
+
+# az mysql flexible-server firewall-rule create \
+#     --resource-group $RESOURCE_GROUP_NAME \
+#     --name $MYSQL_NAME \
+#     --rule-name AllowCurrentMachineToConnect \
+#     --start-ip-address ${MY_IP} \
+#     --end-ip-address ${MY_IP}
+
+IDENTITY_LOGIN_NAME="mysql_conn"
+
+cat <<EOF >createuser.sql
+SET aad_auth_validate_oids_in_tenant = OFF;
+DROP USER IF EXISTS '${IDENTITY_LOGIN_NAME}'@'%';
+CREATE AADUSER '${IDENTITY_LOGIN_NAME}' IDENTIFIED BY '${WI_CLIENT_ID}';
+GRANT ALL PRIVILEGES ON ${DATABASE_NAME}.* TO '${IDENTITY_LOGIN_NAME}'@'%';
+FLUSH privileges;
+EOF
+
+RDBMS_ACCESS_TOKEN=$(az account get-access-token \
+    --resource-type oss-rdbms \
+    --query accessToken \
+    --output tsv) 
+echo $RDBMS_ACCESS_TOKEN
+
+az mysql flexible-server execute \
+    --name ${MYSQL_SERVER_NAME} \
+    --admin-user ${CURRENT_USER} \
+    --admin-password ${RDBMS_ACCESS_TOKEN} \
+    --file-path "createuser.sql"
+
+# Replace dependency in pom files!!!
+# FROM 
+#        <dependency>
+#            <groupId>com.mysql</groupId>
+#            <artifactId>mysql-connector-j</artifactId>
+#            <scope>runtime</scope>
+#        </dependency>
+#TO
+#        <dependency>
+#          <groupId>com.azure.spring</groupId>
+#          <artifactId>spring-cloud-azure-starter-jdbc-mysql</artifactId>
+#        </dependency>
+
+# In main pom.xml file, add Azure BOM: 
+            # <dependency>
+            #   <groupId>com.azure.spring</groupId>
+            #   <artifactId>spring-cloud-azure-dependencies</artifactId>
+            #   <version>${version.spring.cloud.azure}</version>
+            #   <type>pom</type>
+            #   <scope>import</scope>
+            # </dependency>  
+# AND 5.2.0!!!!
+# <version.spring.cloud.azure>5.1.0</version.spring.cloud.azure>
+
+# AND delete first 2 lines in db/mysql/schema.sql files for the 3 services
+
+cd ..
+
+mvn clean package -DskipTests
+
+cd staging-acr
+rm spring-petclinic-customers-service-$VERSION.jar
+rm spring-petclinic-visits-service-$VERSION.jar
+rm spring-petclinic-vets-service-$VERSION.jar
+cp ../spring-petclinic-customers-service/target/spring-petclinic-customers-service-$VERSION.jar spring-petclinic-customers-service-$VERSION.jar
+cp ../spring-petclinic-visits-service/target/spring-petclinic-visits-service-$VERSION.jar spring-petclinic-visits-service-$VERSION.jar
+cp ../spring-petclinic-vets-service/target/spring-petclinic-vets-service-$VERSION.jar spring-petclinic-vets-service-$VERSION.jar
+
+
+az acr build \
+    --resource-group $RESOURCE_GROUP \
+    --registry $MYACR \
+    --image spring-petclinic-customers-service:$VERSION \
+    --build-arg ARTIFACT_NAME=spring-petclinic-customers-service-$VERSION.jar \
+    --build-arg APP_PORT=8080 \
+    --build-arg AI_JAR=ai.jar \
+    .
+   
+az acr build \
+    --resource-group $RESOURCE_GROUP \
+    --registry $MYACR \
+    --image spring-petclinic-visits-service:$VERSION \
+    --build-arg ARTIFACT_NAME=spring-petclinic-visits-service-$VERSION.jar \
+    --build-arg APP_PORT=8080 \
+    --build-arg AI_JAR=ai.jar \
+    .
+   
+az acr build \
+    --resource-group $RESOURCE_GROUP \
+    --registry $MYACR \
+    --image spring-petclinic-vets-service:$VERSION \
+    --build-arg ARTIFACT_NAME=spring-petclinic-vets-service-$VERSION.jar \
+    --build-arg APP_PORT=8080 \
+    --build-arg AI_JAR=ai.jar \
+    .
+
+# EDIT application.yml!!!
+
+# Update customer, visits vets .yml files to include 
+# azure.workload.identity/use: "true"
+# serviceAccountName: workload-identity-sa
+
+
+cd ../kubernetes
+kubectl apply -f spring-petclinic-customers-service.yml 
+kubectl get pods -w
+kubectl apply -f spring-petclinic-vets-service.yml 
+kubectl apply -f spring-petclinic-visits-service.yml 
+
+kubectl logs visits-service-5f4455c9b8-8lj48

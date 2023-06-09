@@ -1,0 +1,110 @@
+WORKSPACE=la-$APPNAME-$UNIQUEID
+az monitor log-analytics workspace create \
+    --resource-group $RESOURCE_GROUP \
+    --workspace-name $WORKSPACE
+
+WORSPACEID=$(az monitor log-analytics workspace show -n $WORKSPACE -g $RESOURCE_GROUP --query id -o tsv)
+   
+az aks enable-addons \
+    -a monitoring \
+    -n $AKSCLUSTER \
+    -g $RESOURCE_GROUP \
+    --workspace-resource-id $WORSPACEID
+
+kubectl get ds ama-logs --namespace=kube-system
+
+AINAME=ai-$APPNAME-$UNIQUEID
+az extension add -n application-insights
+az monitor app-insights component create \
+    --app $AINAME \
+    --location $LOCATION \
+    --kind web \
+    -g $RESOURCE_GROUP \
+    --workspace $WORSPACEID
+
+wget https://github.com/microsoft/ApplicationInsights-Java/releases/download/3.4.3/applicationinsights-agent-3.4.3.jar
+cp applicationinsights-agent-3.4.3.jar ai.jar
+
+az acr build \
+    --resource-group $RESOURCE_GROUP \
+    --registry $MYACR \
+    --image spring-petclinic-api-gateway:$VERSION \
+    --build-arg ARTIFACT_NAME=spring-petclinic-api-gateway-$VERSION.jar \
+    --build-arg APP_PORT=8080 \
+    --build-arg AI_JAR=ai.jar \
+    .
+   
+az acr build \
+    --resource-group $RESOURCE_GROUP \
+    --registry $MYACR \
+    --image spring-petclinic-admin-server:$VERSION \
+    --build-arg ARTIFACT_NAME=spring-petclinic-admin-server-$VERSION.jar \
+    --build-arg APP_PORT=8080 \
+    --build-arg AI_JAR=ai.jar \
+    .
+   
+az acr build \
+    --resource-group $RESOURCE_GROUP \
+    --registry $MYACR \
+    --image spring-petclinic-customers-service:$VERSION \
+    --build-arg ARTIFACT_NAME=spring-petclinic-customers-service-$VERSION.jar \
+    --build-arg APP_PORT=8080 \
+    --build-arg AI_JAR=ai.jar \
+    .
+   
+az acr build \
+    --resource-group $RESOURCE_GROUP \
+    --registry $MYACR \
+    --image spring-petclinic-visits-service:$VERSION \
+    --build-arg ARTIFACT_NAME=spring-petclinic-visits-service-$VERSION.jar \
+    --build-arg APP_PORT=8080 \
+    --build-arg AI_JAR=ai.jar \
+    .
+   
+az acr build \
+    --resource-group $RESOURCE_GROUP \
+    --registry $MYACR \
+    --image spring-petclinic-vets-service:$VERSION \
+    --build-arg ARTIFACT_NAME=spring-petclinic-vets-service-$VERSION.jar \
+    --build-arg APP_PORT=8080 \
+    --build-arg AI_JAR=ai.jar \
+    .
+   
+az acr build \
+    --resource-group $RESOURCE_GROUP \
+    --registry $MYACR \
+    --image spring-petclinic-config-server:$VERSION \
+    --build-arg ARTIFACT_NAME=spring-petclinic-config-server-$VERSION.jar \
+    --build-arg APP_PORT=8888 \
+    --build-arg AI_JAR=ai.jar \
+    .
+   
+az acr build \
+    --resource-group $RESOURCE_GROUP \
+    --registry $MYACR \
+    --image spring-petclinic-discovery-server:$VERSION \
+    --build-arg ARTIFACT_NAME=spring-petclinic-discovery-server-$VERSION.jar \
+    --build-arg APP_PORT=8761 \
+    --build-arg AI_JAR=ai.jar \
+    .
+
+AI_CONNECTIONSTRING=$(az monitor app-insights component show --app $AINAME -g $RESOURCE_GROUP --query connectionString)
+echo $AI_CONNECTIONSTRING
+
+kubectl replace -f config-map.yml --namespace spring-petclinic
+
+kubectl apply -f spring-petclinic-config-server.yml 
+kubectl get pods -w
+
+kubectl apply -f spring-petclinic-discovery-server.yml
+kubectl get pods -w
+
+kubectl apply -f spring-petclinic-customers-service.yml
+kubectl apply -f spring-petclinic-visits-service.yml
+kubectl apply -f spring-petclinic-vets-service.yml
+kubectl apply -f spring-petclinic-api-gateway.yml
+kubectl apply -f spring-petclinic-admin-server.yml
+
+kubectl logs admin-server-5dc6b64744-r5t66
+
+

@@ -28,6 +28,17 @@ import jakarta.validation.constraints.Min;
 import java.util.List;
 import java.util.Optional;
 
+import reactor.core.publisher.Sinks;
+import reactor.core.publisher.Flux;
+import org.springframework.messaging.Message;
+import org.springframework.messaging.support.MessageBuilder;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.context.annotation.Bean;
+import java.util.function.Supplier;
+
+import org.springframework.beans.factory.annotation.Autowired;
+
 /**
  * @author Juergen Hoeller
  * @author Ken Krebs
@@ -44,12 +55,23 @@ class OwnerResource {
 
     private final OwnerRepository ownerRepository;
 
+    @Autowired
+    private Sinks.Many<Message<String>> many;
+
+    private static final Logger LOGGER = LoggerFactory.getLogger(OwnerResource.class);
+
     /**
      * Create Owner
      */
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
     public Owner createOwner(@Valid @RequestBody Owner owner) {
+        LOGGER.info("+++Sending events+++");
+        many.emitNext(MessageBuilder.withPayload("New owner created: " + owner.getFirstName() + " " + owner.getLastName() + " with many pets ...").build(), Sinks.EmitFailureHandler.FAIL_FAST);
+        for(int i = 0; i < 100; i++) {
+            many.emitNext(MessageBuilder.withPayload("Pet " + i).build(), Sinks.EmitFailureHandler.FAIL_FAST);
+        }
+
         return ownerRepository.save(owner);
     }
 

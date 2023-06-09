@@ -1,0 +1,77 @@
+SERVICEBUS_NAMESPACE=sb-$APPNAME-$UNIQUEID
+echo $SERVICEBUS_NAMESPACE
+
+az servicebus namespace create \
+    --resource-group $RESOURCE_GROUP \
+    --name $SERVICEBUS_NAMESPACE \
+    --location $LOCATION \
+    --sku Premium
+
+az servicebus queue create \
+    --resource-group $RESOURCE_GROUP \
+    --namespace-name $SERVICEBUS_NAMESPACE \
+    --name visits-requests
+
+SERVICEBUS_ID=$(az servicebus namespace show --resource-group $RESOURCE_GROUP --namespace-name $SERVICEBUS_NAMESPACE --query id -o tsv)
+echo $SERVICEBUS_ID
+
+az servicebus namespace show --resource-group $RESOURCE_GROUP --namespace-name $SERVICEBUS_NAMESPACE
+
+
+SERVICEBUS_CONNECTIONSTRING=$(az servicebus namespace authorization-rule keys list \
+    --resource-group $RESOURCE_GROUP \
+    --namespace-name $SERVICEBUS_NAMESPACE \
+    --name RootManageSharedAccessKey \
+    --query primaryConnectionString \
+    --output tsv)
+echo $SERVICEBUS_CONNECTIONSTRING
+
+# Added to config
+#  jms:
+#    servicebus:
+#      connection-string: Endpoint=sb://sb-petclinic-38cb12.servicebus.windows.net/
+
+# Better config:
+
+#   jms:
+#     servicebus:
+#       # connection-string: Endpoint=sb://sb-petclinic-38cb12.servicebus.windows.net/;
+#       idle-timeout: 60000
+#       pricing-tier: premium
+#       enabled: true
+#       passwordless-enabled: true
+#       namespace: sb-petclinic-38cb12.servicebus.windows.net
+
+cd ..
+
+
+mvn clean package -DskipTests -rf :spring-petclinic-messaging-emulator
+
+cd staging-acr
+   
+cp ../spring-petclinic-messaging-emulator/target/spring-petclinic-messaging-emulator-$VERSION.jar spring-petclinic-messaging-emulator-$VERSION.jar
+az acr build \
+    --resource-group $RESOURCE_GROUP \
+    --registry $MYACR \
+    --image spring-petclinic-messaging-emulator:$VERSION \
+    --build-arg ARTIFACT_NAME=spring-petclinic-messaging-emulator-$VERSION.jar \
+    --build-arg APP_PORT=8080 \
+    --build-arg AI_JAR=ai.jar \
+    .
+
+echo $USER_ASSIGNED_IDENTITY_NAME
+az role assignment create --assignee $USER_ASSIGNED_CLIENT_ID --role 'Azure Service Bus Data Owner' --scope $SERVICEBUS_ID
+
+# Don't set secrets
+# Need to change spring-petclinic-messaging-emulator.yml!!!
+
+cd ../kubernetes
+kubectl apply -f spring-petclinic-messaging-emulator.yml
+
+kubectl get pods -w
+
+kubectl logs config-server-67d7754d59-pw6db
+
+# NOT working for now: passwordless NOT yet supported for spring boot 3.0 
+
+

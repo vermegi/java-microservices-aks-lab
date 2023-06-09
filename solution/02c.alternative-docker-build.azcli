@@ -1,0 +1,21 @@
+cd ..
+
+mvn clean package -DskipTests -rf :spring-petclinic-config-server
+cd staging-acr
+   
+cp ../spring-petclinic-config-server/target/spring-petclinic-config-server-$VERSION.jar spring-petclinic-config-server-$VERSION.jar
+
+
+docker build -t $MYACR.azurecr.io/spring-petclinic-config-server:$VERSION \
+    --build-arg ARTIFACT_NAME=spring-petclinic-config-server-$VERSION.jar \
+    --build-arg APP_PORT=8888 \
+    --build-arg AI_JAR=ai.jar \
+    .
+
+#docker tag spring-petclinic-config-server:$VERSION $MYACR.azurecr.io/spring-petclinic-config-server:$VERSION
+
+docker image list
+
+docker push $MYACR.azurecr.io/spring-petclinic-config-server:$VERSION
+
+kubectl logs config-server-67d7754d59-lfx4d

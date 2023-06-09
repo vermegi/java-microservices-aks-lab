@@ -1,0 +1,92 @@
+az aks get-credentials -n $AKSCLUSTER -g $RESOURCE_GROUP
+
+kubectl get pods --all-namespaces
+
+NAMESPACE=spring-petclinic
+kubectl create ns $NAMESPACE
+
+cd kubernetes
+
+kubectl create -f config-map.yml --namespace spring-petclinic
+
+kubectl get configmap -n spring-petclinic
+
+kubectl describe configmap config-server -n spring-petclinic
+
+DEPLOYMENT=api-gateway
+TEMPLATE_FILE=deployment-template.yml
+IMAGE=${MYACR}.azurecr.io/spring-petclinic-api-gateway:$VERSION
+SERVICE_TYPE=LoadBalancer
+SERVICE_NAME=api-gateway
+APP_PORT=8080
+OUTPUTFILE=spring-petclinic-api-gateway.yml
+sed "s|#appname#|$DEPLOYMENT|g" $TEMPLATE_FILE | sed "s|#image#|$IMAGE|g" | sed "s|#service_type#|$SERVICE_TYPE|g" | sed "s|#service_name#|$SERVICE_NAME|g"    | sed "s|#appport#|$APP_PORT|g" > $OUTPUTFILE
+
+DEPLOYMENT=customers-service
+IMAGE=${MYACR}.azurecr.io/spring-petclinic-customers-service:$VERSION
+SERVICE_TYPE=ClusterIP
+SERVICE_NAME=customers-service
+OUTPUTFILE=spring-petclinic-customers-service.yml
+sed "s|#appname#|$DEPLOYMENT|g" $TEMPLATE_FILE | sed "s|#image#|$IMAGE|g" | sed "s|#service_type#|$SERVICE_TYPE|g" | sed "s|#service_name#|$SERVICE_NAME|g"    | sed "s|#appport#|$APP_PORT|g" > $OUTPUTFILE
+
+
+DEPLOYMENT=admin-server
+IMAGE=${MYACR}.azurecr.io/spring-petclinic-admin-server:$VERSION
+SERVICE_NAME=admin-server
+OUTPUTFILE=spring-petclinic-admin-server.yml
+sed "s|#appname#|$DEPLOYMENT|g" $TEMPLATE_FILE | sed "s|#image#|$IMAGE|g" | sed "s|#service_type#|$SERVICE_TYPE|g" | sed "s|#service_name#|$SERVICE_NAME|g"    | sed "s|#appport#|$APP_PORT|g" > $OUTPUTFILE
+
+DEPLOYMENT=visits-service
+IMAGE=${MYACR}.azurecr.io/spring-petclinic-visits-service:$VERSION
+SERVICE_NAME=visits-service
+OUTPUTFILE=spring-petclinic-visits-service.yml
+sed "s|#appname#|$DEPLOYMENT|g" $TEMPLATE_FILE | sed "s|#image#|$IMAGE|g" | sed "s|#service_type#|$SERVICE_TYPE|g" | sed "s|#service_name#|$SERVICE_NAME|g"    | sed "s|#appport#|$APP_PORT|g" > $OUTPUTFILE
+
+DEPLOYMENT=vets-service
+IMAGE=${MYACR}.azurecr.io/spring-petclinic-vets-service:$VERSION
+SERVICE_NAME=vets-service
+OUTPUTFILE=spring-petclinic-vets-service.yml
+sed "s|#appname#|$DEPLOYMENT|g" $TEMPLATE_FILE | sed "s|#image#|$IMAGE|g" | sed "s|#service_type#|$SERVICE_TYPE|g" | sed "s|#service_name#|$SERVICE_NAME|g"    | sed "s|#appport#|$APP_PORT|g" > $OUTPUTFILE
+
+DEPLOYMENT=config-server
+IMAGE=${MYACR}.azurecr.io/spring-petclinic-config-server:$VERSION
+SERVICE_NAME=config-server
+APP_PORT=8888
+OUTPUTFILE=spring-petclinic-config-server.yml
+sed "s|#appname#|$DEPLOYMENT|g" $TEMPLATE_FILE | sed "s|#image#|$IMAGE|g" | sed "s|#service_type#|$SERVICE_TYPE|g" | sed "s|#service_name#|$SERVICE_NAME|g"    | sed "s|#appport#|$APP_PORT|g" > $OUTPUTFILE
+
+DEPLOYMENT=discovery-server
+IMAGE=${MYACR}.azurecr.io/spring-petclinic-discovery-server:$VERSION
+SERVICE_NAME=discovery-server
+APP_PORT=8761
+OUTPUTFILE=spring-petclinic-discovery-server.yml
+sed "s|#appname#|$DEPLOYMENT|g" $TEMPLATE_FILE | sed "s|#image#|$IMAGE|g" | sed "s|#service_type#|$SERVICE_TYPE|g" | sed "s|#service_name#|$SERVICE_NAME|g"    | sed "s|#appport#|$APP_PORT|g" > $OUTPUTFILE
+
+kubectl config set-context --current --namespace=$NAMESPACE
+   
+kubectl apply -f spring-petclinic-config-server.yml 
+kubectl get pods -w
+
+kubectl apply -f spring-petclinic-discovery-server.yml
+kubectl get pods -w
+
+kubectl apply -f spring-petclinic-customers-service.yml
+kubectl apply -f spring-petclinic-visits-service.yml
+kubectl apply -f spring-petclinic-vets-service.yml
+kubectl apply -f spring-petclinic-api-gateway.yml
+kubectl apply -f spring-petclinic-admin-server.yml
+
+kubectl get pods
+
+kubectl describe pod <name-of-the-pod> -n spring-petclinic
+
+kubectl logs visits-service-6f6b48ddb8-xr7xb 
+
+kubectl get services -n spring-petclinic
+
+
+
+
+
+
+
