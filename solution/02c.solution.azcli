@@ -1,0 +1,140 @@
+cd src
+
+mvn clean package -DskipTests
+
+az acr login --name $MYACR
+
+mkdir -p staging-acr
+cd staging-acr
+
+cp ../spring-petclinic-api-gateway/target/spring-petclinic-api-gateway-$VERSION.jar spring-petclinic-api-gateway-$VERSION.jar
+cp ../spring-petclinic-admin-server/target/spring-petclinic-admin-server-$VERSION.jar spring-petclinic-admin-server-$VERSION.jar
+cp ../spring-petclinic-customers-service/target/spring-petclinic-customers-service-$VERSION.jar spring-petclinic-customers-service-$VERSION.jar
+cp ../spring-petclinic-visits-service/target/spring-petclinic-visits-service-$VERSION.jar spring-petclinic-visits-service-$VERSION.jar
+cp ../spring-petclinic-vets-service/target/spring-petclinic-vets-service-$VERSION.jar spring-petclinic-vets-service-$VERSION.jar
+cp ../spring-petclinic-config-server/target/spring-petclinic-config-server-$VERSION.jar spring-petclinic-config-server-$VERSION.jar
+cp ../spring-petclinic-discovery-server/target/spring-petclinic-discovery-server-$VERSION.jar spring-petclinic-discovery-server-$VERSION.jar
+
+docker build -t $MYACR.azurecr.io/spring-petclinic-api-gateway:$VERSION \
+    --build-arg ARTIFACT_NAME=spring-petclinic-api-gateway-$VERSION.jar \
+    --build-arg APP_PORT=8080 \
+    .
+
+docker image list
+
+docker push $MYACR.azurecr.io/spring-petclinic-api-gateway:$VERSION
+
+az acr repository list \
+   -n $MYACR
+
+docker build -t $MYACR.azurecr.io/spring-petclinic-admin-server:$VERSION \
+    --build-arg ARTIFACT_NAME=spring-petclinic-admin-server-$VERSION.jar \
+    --build-arg APP_PORT=8080 \
+    .
+
+docker push $MYACR.azurecr.io/spring-petclinic-admin-server:$VERSION
+
+docker build -t $MYACR.azurecr.io/spring-petclinic-customers-service:$VERSION \
+    --build-arg ARTIFACT_NAME=spring-petclinic-customers-service-$VERSION.jar \
+    --build-arg APP_PORT=8080 \
+    .
+
+docker push $MYACR.azurecr.io/spring-petclinic-customers-service:$VERSION
+
+docker build -t $MYACR.azurecr.io/spring-petclinic-visits-service:$VERSION \
+    --build-arg ARTIFACT_NAME=spring-petclinic-visits-service-$VERSION.jar \
+    --build-arg APP_PORT=8080 \
+    .
+
+docker push $MYACR.azurecr.io/spring-petclinic-visits-service:$VERSION
+
+docker build -t $MYACR.azurecr.io/spring-petclinic-vets-service:$VERSION \
+    --build-arg ARTIFACT_NAME=spring-petclinic-vets-service-$VERSION.jar \
+    --build-arg APP_PORT=8080 \
+    .
+docker push $MYACR.azurecr.io/spring-petclinic-vets-service:$VERSION
+
+docker build -t $MYACR.azurecr.io/spring-petclinic-config-server:$VERSION \
+    --build-arg ARTIFACT_NAME=spring-petclinic-config-server-$VERSION.jar \
+    --build-arg APP_PORT=8888 \
+    .
+
+docker push $MYACR.azurecr.io/spring-petclinic-config-server:$VERSION
+
+docker build -t $MYACR.azurecr.io/spring-petclinic-discovery-server:$VERSION \
+    --build-arg ARTIFACT_NAME=spring-petclinic-discovery-server-$VERSION.jar \
+    --build-arg APP_PORT=8761 \
+    .
+
+docker push $MYACR.azurecr.io/spring-petclinic-discovery-server:$VERSION
+
+kubectl logs config-server-67d7754d59-2dlkp
+
+az aks show  --name $AKSCLUSTER --resource-group $RESOURCE_GROUP
+
+kubectl get serviceaccounts
+kubectl get secretproviderclass
+kubectl describe secretproviderclass azure-kvname-user-msi
+
+kubectl get secrets
+
+kubectl describe pod config-server-67d7754d59-9k9lc
+
+kubectl exec -it config-server-67d7754d59-9k9lc -- env 
+
+az keyvault secret set \
+    --name GIT-PAT \
+    --value $GIT_PAT \
+    --vault-name $KEYVAULT_NAME
+
+kubectl apply -f spring-petclinic-config-server.yml 
+
+
+az mysql flexible-server identity assign \
+    --resource-group $RESOURCE_GROUP \
+    --server-name $MYSQL_SERVER_NAME \
+    --identity $DB_ADMIN_USER_ASSIGNED_IDENTITY_NAME
+
+echo $DB_ADMIN_USER_ASSIGNED_IDENTITY_NAME
+
+az mysql flexible-server ad-admin create \
+    --resource-group $RESOURCE_GROUP \
+    --server-name $MYSQL_SERVER_NAME \
+    --object-id $CURRENT_USER_OBJECTID \
+    --display-name $CURRENT_USER \
+    --identity $DB_ADMIN_USER_ASSIGNED_IDENTITY_NAME
+
+echo $CURRENT_USER_OBJECTID
+echo $CURRENT_USER
+
+IDENTITY_LOGIN_NAME="mysql_conn"
+
+cd ..
+
+USER_ASSIGNED_IDENTITY_NAME=uid-$APPNAME-$UNIQUEID
+USER_ASSIGNED_CLIENT_ID="$(az identity show --resource-group "${RESOURCE_GROUP}" --name "${USER_ASSIGNED_IDENTITY_NAME}" --query 'clientId' -otsv)"
+
+cat <<EOF >createuser.sql
+SET aad_auth_validate_oids_in_tenant = OFF;
+DROP USER IF EXISTS '${IDENTITY_LOGIN_NAME}'@'%';
+CREATE AADUSER '${IDENTITY_LOGIN_NAME}' IDENTIFIED BY '${USER_ASSIGNED_CLIENT_ID}';
+GRANT ALL PRIVILEGES ON ${DATABASE_NAME}.* TO '${IDENTITY_LOGIN_NAME}'@'%';
+FLUSH privileges;
+EOF
+
+RDBMS_ACCESS_TOKEN=$(az account get-access-token \
+    --resource-type oss-rdbms \
+    --query accessToken \
+    --output tsv) 
+echo $RDBMS_ACCESS_TOKEN
+
+az mysql flexible-server execute \
+    --name ${MYSQL_SERVER_NAME} \
+    --admin-user ${CURRENT_USER} \
+    --admin-password ${RDBMS_ACCESS_TOKEN} \
+    --file-path "createuser.sql"   
+
+kubectl logs customers-service-7cbc4bbc4d-4g5gb
+
+
+
