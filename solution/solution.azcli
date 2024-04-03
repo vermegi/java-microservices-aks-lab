@@ -1,0 +1,223 @@
+az login
+
+az account list -o table
+
+az account set --subscription 49e23c68-dee0-4c5b-8c21-74acea0a2662
+
+UNIQUEID=$(openssl rand -hex 3)
+APPNAME=petclinic
+RESOURCE_GROUP=rg-$APPNAME-$UNIQUEID
+LOCATION=francecentral
+az group create -g $RESOURCE_GROUP -l $LOCATION
+
+
+MYACR=acr$APPNAME$UNIQUEID
+az acr create \
+    -n $MYACR \
+    -g $RESOURCE_GROUP \
+    --sku Basic
+
+VIRTUAL_NETWORK_NAME=vnet-$APPNAME-$UNIQUEID
+az network vnet create \
+    --resource-group $RESOURCE_GROUP \
+    --name $VIRTUAL_NETWORK_NAME \
+    --location $LOCATION \
+    --address-prefix 10.1.0.0/16
+   
+AKS_SUBNET_CIDR=10.1.0.0/24
+az network vnet subnet create \
+    --resource-group $RESOURCE_GROUP \
+    --vnet-name $VIRTUAL_NETWORK_NAME \
+    --address-prefixes $AKS_SUBNET_CIDR \
+    --name aks-subnet 
+
+SUBNET_ID=$(az network vnet subnet show --resource-group $RESOURCE_GROUP --vnet-name $VIRTUAL_NETWORK_NAME --name aks-subnet --query id -o tsv)
+
+AKSCLUSTER=aks-$APPNAME-$UNIQUEID
+az aks create \
+    -n $AKSCLUSTER \
+    -g $RESOURCE_GROUP \
+    --location $LOCATION \
+    --generate-ssh-keys \
+    --attach-acr $MYACR \
+    --vnet-subnet-id $SUBNET_ID
+
+MYSQL_SERVER_NAME=mysql-$APPNAME-$UNIQUEID
+MYSQL_ADMIN_USERNAME=myadmin
+MYSQL_ADMIN_PASSWORD=xxxx
+DATABASE_NAME=petclinic
+      
+az mysql flexible-server create \
+    --admin-user myadmin \
+    --admin-password ${MYSQL_ADMIN_PASSWORD} \
+    --name ${MYSQL_SERVER_NAME} \
+    --resource-group ${RESOURCE_GROUP} 
+
+ az mysql flexible-server db create \
+     --server-name $MYSQL_SERVER_NAME \
+     --resource-group $RESOURCE_GROUP \
+     -d $DATABASE_NAME
+
+ az mysql flexible-server firewall-rule create \
+     --rule-name allAzureIPs \
+     --name ${MYSQL_SERVER_NAME} \
+     --resource-group ${RESOURCE_GROUP} \
+     --start-ip-address 0.0.0.0 --end-ip-address 0.0.0.0
+
+VERSION=3.0.2
+
+cd src 
+
+mvn clean package -DskipTests
+
+az acr login --name $MYACR
+
+
+mkdir -p staging-acr
+cd staging-acr
+
+cp ../spring-petclinic-api-gateway/target/spring-petclinic-api-gateway-$VERSION.jar spring-petclinic-api-gateway-$VERSION.jar
+cp ../spring-petclinic-admin-server/target/spring-petclinic-admin-server-$VERSION.jar spring-petclinic-admin-server-$VERSION.jar
+cp ../spring-petclinic-customers-service/target/spring-petclinic-customers-service-$VERSION.jar spring-petclinic-customers-service-$VERSION.jar
+cp ../spring-petclinic-visits-service/target/spring-petclinic-visits-service-$VERSION.jar spring-petclinic-visits-service-$VERSION.jar
+cp ../spring-petclinic-vets-service/target/spring-petclinic-vets-service-$VERSION.jar spring-petclinic-vets-service-$VERSION.jar
+cp ../spring-petclinic-config-server/target/spring-petclinic-config-server-$VERSION.jar spring-petclinic-config-server-$VERSION.jar
+cp ../spring-petclinic-discovery-server/target/spring-petclinic-discovery-server-$VERSION.jar spring-petclinic-discovery-server-$VERSION.jar
+
+docker build -t $MYACR.azurecr.io/spring-petclinic-api-gateway:$VERSION \
+    --build-arg ARTIFACT_NAME=spring-petclinic-api-gateway-$VERSION.jar \
+    --build-arg APP_PORT=8080 \
+    .
+
+docker image list
+   
+docker push $MYACR.azurecr.io/spring-petclinic-api-gateway:$VERSION
+
+az acr repository list \
+   -n $MYACR
+
+docker build -t $MYACR.azurecr.io/spring-petclinic-admin-server:$VERSION \
+    --build-arg ARTIFACT_NAME=spring-petclinic-admin-server-$VERSION.jar \
+    --build-arg APP_PORT=8080 \
+    .
+   
+docker push $MYACR.azurecr.io/spring-petclinic-admin-server:$VERSION
+
+docker build -t $MYACR.azurecr.io/spring-petclinic-customers-service:$VERSION \
+    --build-arg ARTIFACT_NAME=spring-petclinic-customers-service-$VERSION.jar \
+    --build-arg APP_PORT=8080 \
+    .
+   
+docker push $MYACR.azurecr.io/spring-petclinic-customers-service:$VERSION
+
+docker build -t $MYACR.azurecr.io/spring-petclinic-visits-service:$VERSION \
+    --build-arg ARTIFACT_NAME=spring-petclinic-visits-service-$VERSION.jar \
+    --build-arg APP_PORT=8080 \
+    .
+   
+docker push $MYACR.azurecr.io/spring-petclinic-visits-service:$VERSION
+
+docker build -t $MYACR.azurecr.io/spring-petclinic-vets-service:$VERSION \
+    --build-arg ARTIFACT_NAME=spring-petclinic-vets-service-$VERSION.jar \
+    --build-arg APP_PORT=8080 \
+    .
+docker push $MYACR.azurecr.io/spring-petclinic-vets-service:$VERSION
+
+docker build -t $MYACR.azurecr.io/spring-petclinic-config-server:$VERSION \
+    --build-arg ARTIFACT_NAME=spring-petclinic-config-server-$VERSION.jar \
+    --build-arg APP_PORT=8888 \
+    .
+   
+docker push $MYACR.azurecr.io/spring-petclinic-config-server:$VERSION
+
+az acr repository list \
+   -n $MYACR
+
+az acr repository show-tags \
+    -n $MYACR \
+    --repository spring-petclinic-customers-service
+
+az aks get-credentials -n $AKSCLUSTER -g $RESOURCE_GROUP
+
+kubectl get pods --all-namespaces
+
+NAMESPACE=spring-petclinic
+kubectl create ns $NAMESPACE
+
+cd kubernetes
+
+kubectl create -f config-map.yml --namespace spring-petclinic
+
+kubectl describe configmap config-server -n spring-petclinic
+
+curl -o spring-petclinic-api-gateway.yml https://raw.githubusercontent.com/Azure-Samples/java-microservices-aks-lab/main/docs/02_lab_migrate/spring-petclinic-api-gateway.yml
+
+IMAGE=${MYACR}.azurecr.io/spring-petclinic-api-gateway:$VERSION
+sed -i "s|#image#|$IMAGE|g" spring-petclinic-api-gateway.yml
+
+
+curl -o spring-petclinic-admin-server.yml https://raw.githubusercontent.com/Azure-Samples/java-microservices-aks-lab/main/docs/02_lab_migrate/spring-petclinic-admin-server.yml
+
+IMAGE=${MYACR}.azurecr.io/spring-petclinic-admin-server:$VERSION
+sed -i "s|#image#|$IMAGE|g" spring-petclinic-admin-server.yml
+
+curl -o spring-petclinic-customers-service.yml https://raw.githubusercontent.com/Azure-Samples/java-microservices-aks-lab/main/docs/02_lab_migrate/spring-petclinic-customers-service.yml
+
+IMAGE=${MYACR}.azurecr.io/spring-petclinic-customers-service:$VERSION
+sed -i "s|#image#|$IMAGE|g" spring-petclinic-customers-service.yml
+
+
+curl -o spring-petclinic-visits-service.yml https://raw.githubusercontent.com/Azure-Samples/java-microservices-aks-lab/main/docs/02_lab_migrate/spring-petclinic-visits-service.yml
+
+IMAGE=${MYACR}.azurecr.io/spring-petclinic-visits-service:$VERSION
+sed -i "s|#image#|$IMAGE|g" spring-petclinic-visits-service.yml
+
+
+curl -o spring-petclinic-vets-service.yml https://raw.githubusercontent.com/Azure-Samples/java-microservices-aks-lab/main/docs/02_lab_migrate/spring-petclinic-vets-service.yml
+
+IMAGE=${MYACR}.azurecr.io/spring-petclinic-vets-service:$VERSION
+sed -i "s|#image#|$IMAGE|g" spring-petclinic-vets-service.yml
+
+
+curl -o spring-petclinic-config-server.yml https://raw.githubusercontent.com/Azure-Samples/java-microservices-aks-lab/main/docs/02_lab_migrate/spring-petclinic-config-server.yml
+
+IMAGE=${MYACR}.azurecr.io/spring-petclinic-config-server:$VERSION
+sed -i "s|#image#|$IMAGE|g" spring-petclinic-config-server.yml
+
+
+curl -o spring-petclinic-discovery-server.yml https://raw.githubusercontent.com/Azure-Samples/java-microservices-aks-lab/main/docs/02_lab_migrate/spring-petclinic-discovery-server.yml
+
+IMAGE=${MYACR}.azurecr.io/spring-petclinic-discovery-server:$VERSION
+sed -i "s|#image#|$IMAGE|g" spring-petclinic-discovery-server.yml
+
+
+kubectl config set-context --current --namespace=$NAMESPACE
+   
+kubectl apply -f spring-petclinic-config-server.yml 
+kubectl get pods -w
+
+kubectl apply -f spring-petclinic-discovery-server.yml
+kubectl get pods -w
+
+kubectl apply -f spring-petclinic-customers-service.yml
+kubectl apply -f spring-petclinic-visits-service.yml
+kubectl apply -f spring-petclinic-vets-service.yml
+kubectl apply -f spring-petclinic-api-gateway.yml
+kubectl apply -f spring-petclinic-admin-server.yml
+
+kubectl get pods
+
+kubectl describe pod <name-of-the-pod> -n spring-petclinic
+
+kubectl logs <name-of-the-pod> -n spring-petclinic
+
+kubectl delete pod <name-of-the-pod> 
+
+
+
+
+
+
+
+
+
