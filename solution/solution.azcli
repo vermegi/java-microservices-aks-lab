@@ -1,0 +1,182 @@
+az login
+
+az account list -o table
+
+az account set --subscription 49e23c68-dee0-4c5b-8c21-74acea0a2662
+
+UNIQUEID=7397db
+$(openssl rand -hex 3)
+APPNAME=petclinic
+RESOURCE_GROUP=rg-$APPNAME-$UNIQUEID
+LOCATION=francecentral
+az group create -g $RESOURCE_GROUP -l $LOCATION
+
+
+MYSQL_SERVER_NAME=mysql-$APPNAME-$UNIQUEID
+MYSQL_ADMIN_USERNAME=myadmin
+MYSQL_ADMIN_PASSWORD=abc1234!
+DATABASE_NAME=petclinic
+      
+az mysql flexible-server create \
+    --admin-user myadmin \
+    --admin-password ${MYSQL_ADMIN_PASSWORD} \
+    --name ${MYSQL_SERVER_NAME} \
+    --resource-group ${RESOURCE_GROUP} 
+
+ az mysql flexible-server db create \
+     --server-name $MYSQL_SERVER_NAME \
+     --resource-group $RESOURCE_GROUP \
+     -d $DATABASE_NAME
+
+ az mysql flexible-server firewall-rule create \
+     --rule-name allAzureIPs \
+     --name ${MYSQL_SERVER_NAME} \
+     --resource-group ${RESOURCE_GROUP} \
+     --start-ip-address 0.0.0.0 --end-ip-address 0.0.0.0
+
+VERSION=3.0.2
+
+cd src 
+
+ACA_ENVIRONMENT=aca-$APPNAME-$UNIQUEID
+
+az containerapp env create \
+  --name $ACA_ENVIRONMENT \
+  --resource-group $RESOURCE_GROUP \
+  --location $LOCATION
+
+JAVA_COMPONENT_NAME=myconfigserver
+APP_NAME=config-server
+URI="https://github.com/vermegi/spring-petclinic-microservices-config.git"
+USERNAME="vermegi"
+PASSWORD="xxxx"
+
+az containerapp env java-component spring-cloud-config create \
+  --environment $ACA_ENVIRONMENT \
+  --resource-group $RESOURCE_GROUP \
+  --name $JAVA_COMPONENT_NAME \
+  --configuration spring.cloud.config.server.git.uri=$URI spring.cloud.config.server.git.username=$USERNAME spring.cloud.config.server.git.password=$PASSWORD spring.cloud.config.server.git.default-label=aca-solution-2024-04-03
+
+az containerapp env java-component spring-cloud-config show \
+  --environment $ACA_ENVIRONMENT \
+  --resource-group $RESOURCE_GROUP \
+  --name $JAVA_COMPONENT_NAME
+
+az containerapp env java-component list --environment $ACA_ENVIRONMENT --resource-group $RESOURCE_GROUP -o table
+
+JAVA_COMPONENT_NAME2=eureka
+
+az containerapp env java-component spring-cloud-eureka create \
+    --environment $ACA_ENVIRONMENT \
+    --resource-group $RESOURCE_GROUP \
+    --name $JAVA_COMPONENT_NAME2
+
+# Changed to SPRING_CLOUD_CONFIG_URI in all application.yml files --> we might also just remove this from the config files... 
+# in config repo: 
+#    - remove admin-server.yml (port 9090 makes stuff crash)
+#    - remove port:0 in application.yml (we do this as well in the AKS guidance)
+#    - remove eureka in application.yml (this gets set by eureka binding)
+
+
+mvn clean package -DskipTests 
+
+#below doesn't work currently ... double checking with PG team on correct --build-env-vars
+
+# az containerapp create \
+#   --name api-gateway \
+#   --resource-group $RESOURCE_GROUP \
+#   --environment $ACA_ENVIRONMENT \
+#   --source . \
+#   --min-replicas 1 \
+#   --max-replicas 1 \
+#   --ingress external \
+#   --target-port 8080 \
+#   --build-env-vars "BP_MAVEN_BUILD_ARGUMENTS=-pl spring-petclinic-api-gateway -am -DskipTests" 
+#   \
+#   --bind $JAVA_COMPONENT_NAME $JAVA_COMPONENT_NAME2
+
+# Each of the below sets bindings to config and eureka in a separate az cli statement. 
+# However I tested this in a 1 go statement for vets service, and this worked like a charm, prefer 1 statement. 
+
+az containerapp create \
+  --name api-gateway \
+  --resource-group $RESOURCE_GROUP \
+  --environment $ACA_ENVIRONMENT \
+  --artifact ./spring-petclinic-api-gateway/target/spring-petclinic-api-gateway-$VERSION.jar \
+  --min-replicas 1 \
+  --max-replicas 1 \
+  --ingress external \
+  --target-port 8080 
+
+az containerapp update \
+  --name api-gateway \
+  --resource-group $RESOURCE_GROUP \
+  --bind $JAVA_COMPONENT_NAME $JAVA_COMPONENT_NAME2
+
+az containerapp create \
+  --name admin-server \
+  --resource-group $RESOURCE_GROUP \
+  --environment $ACA_ENVIRONMENT \
+  --artifact ./spring-petclinic-admin-server/target/spring-petclinic-admin-server-$VERSION.jar \
+  --min-replicas 1 \
+  --max-replicas 1 \
+  --ingress external \
+  --target-port 8080 
+
+az containerapp update \
+  --name admin-server \
+  --resource-group $RESOURCE_GROUP \
+  --bind $JAVA_COMPONENT_NAME $JAVA_COMPONENT_NAME2
+
+az containerapp create \
+  --name customers-service \
+  --resource-group $RESOURCE_GROUP \
+  --environment $ACA_ENVIRONMENT \
+  --artifact ./spring-petclinic-customers-service/target/spring-petclinic-customers-service-$VERSION.jar \
+  --min-replicas 1 \
+  --max-replicas 1 \
+  --ingress internal \
+  --target-port 8080 
+
+az containerapp update \
+  --name customers-service \
+  --resource-group $RESOURCE_GROUP \
+  --bind $JAVA_COMPONENT_NAME $JAVA_COMPONENT_NAME2
+
+az containerapp create \
+  --name visits-service \
+  --resource-group $RESOURCE_GROUP \
+  --environment $ACA_ENVIRONMENT \
+  --artifact ./spring-petclinic-visits-service/target/spring-petclinic-visits-service-$VERSION.jar \
+  --min-replicas 1 \
+  --max-replicas 1 \
+  --ingress internal \
+  --target-port 8080 
+
+az containerapp update \
+  --name visits-service \
+  --resource-group $RESOURCE_GROUP \
+  --bind $JAVA_COMPONENT_NAME $JAVA_COMPONENT_NAME2
+
+az containerapp create \
+  --name vets-service \
+  --resource-group $RESOURCE_GROUP \
+  --environment $ACA_ENVIRONMENT \
+  --artifact ./spring-petclinic-vets-service/target/spring-petclinic-vets-service-$VERSION.jar \
+  --min-replicas 1 \
+  --max-replicas 1 \
+  --ingress internal \
+  --target-port 8080 \
+  --bind $JAVA_COMPONENT_NAME $JAVA_COMPONENT_NAME2
+
+
+
+
+
+
+
+
+
+
+
+
