@@ -34,7 +34,7 @@ az mysql flexible-server create \
      --resource-group ${RESOURCE_GROUP} \
      --start-ip-address 0.0.0.0 --end-ip-address 0.0.0.0
 
-VERSION=3.0.2
+VERSION=3.2.5
 
 cd src 
 
@@ -79,21 +79,6 @@ az containerapp env java-component spring-cloud-eureka create \
 
 
 mvn clean package -DskipTests 
-
-#below doesn't work currently ... double checking with PG team on correct --build-env-vars
-
-# az containerapp create \
-#   --name api-gateway \
-#   --resource-group $RESOURCE_GROUP \
-#   --environment $ACA_ENVIRONMENT \
-#   --source . \
-#   --min-replicas 1 \
-#   --max-replicas 1 \
-#   --ingress external \
-#   --target-port 8080 \
-#   --build-env-vars "BP_MAVEN_BUILD_ARGUMENTS=-pl spring-petclinic-api-gateway -am -DskipTests" 
-#   \
-#   --bind $JAVA_COMPONENT_NAME $JAVA_COMPONENT_NAME2
 
 # Each of the below sets bindings to config and eureka in a separate az cli statement. 
 # However I tested this in a 1 go statement for vets service, and this worked like a charm, prefer 1 statement. 
